@@ -1,8 +1,8 @@
 # === Настройки ===
-base_image   := "registry.fedoraproject.org/fedora-toolbox:latest"
 custom_image := "sandbox-base"
 dockerfile   := "Containerfile"
-root_dir     := env_var('HOME') / "isolated_sandboxes"
+# Директория создается рядом с файлом .justfile
+root_dir     := justfile_directory() / "sandboxes"
 user_name    := "sandbox"
 prefix       := "box-"
 
@@ -67,8 +67,6 @@ _box-create name:
     box_path="{{root_dir}}/{{prefix}}{{name}}"
     mkdir -p "$box_path"
     
-    xhost +local: > /dev/null 2>&1 || true
-
     # Лимиты (80% от системы)
     mem_limit=$(awk '/MemTotal/ {print int($2*0.8/1024)}' /proc/meminfo)
     cpu_limit=$(nproc | awk '{print $1*0.8}')
@@ -92,11 +90,10 @@ _box-create name:
         --ipc=host --net=host \
         --device /dev/dri --device /dev/snd \
         --memory "${mem_limit}m" --cpus "$cpu_limit" \
-        -e DISPLAY="$DISPLAY" \
+        --pids-limit=4096 \
         -e WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
         -e XDG_RUNTIME_DIR="{{run_dir}}" \
         -e DBUS_SESSION_BUS_ADDRESS="unix:path={{run_dir}}/bus" \
-        -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
         -v /etc/localtime:/etc/localtime:ro \
         -v "$box_path":/home/{{user_name}}:Z \
         $mounts \
@@ -107,6 +104,7 @@ _box-create name:
 [private]
 _box-setup container:
     #!/usr/bin/env bash
+    # 1. Настройка системы от имени root
     podman exec -u 0 "{{container}}" bash -c "
         orig_user=\$(getent passwd {{uid}} | cut -d: -f1)
         
@@ -119,7 +117,19 @@ _box-setup container:
         
         echo '{{user_name}} ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
         chown {{uid}}:{{uid}} {{run_dir}} && chmod 700 {{run_dir}}
-        chown -R {{uid}}:{{uid}} /home/{{user_name}}
         
-        echo 'export PS1=\"\[\e[1;32m\][📦 {{container}}] \[\e[1;34m\]\u@\h:\w$ \[\e[0m\]\"' >> /home/{{user_name}}/.bashrc
+        # Безопасная настройка .bashrc (добавление пути и промпта)
+        if ! grep -q '.local/bin' /home/{{user_name}}/.bashrc 2>/dev/null; then
+            echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/{{user_name}}/.bashrc
+            echo 'export PS1=\"\[\e[1;32m\][📦 {{container}}] \[\e[1;34m\]\u@\h:\w$ \[\e[0m\]\"' >> /home/{{user_name}}/.bashrc
+            chown {{uid}}:{{uid}} /home/{{user_name}}/.bashrc
+        fi
     "
+
+    # 2. Выполнение пользовательского скрипта настройки
+    if [ -f "setup.sh" ]; then
+        echo "Running custom setup script (setup.sh)..."
+        podman exec -i -u "{{user_name}}" "{{container}}" bash < setup.sh
+    else
+        echo "setup.sh not found, skipping user configuration."
+    fi
