@@ -1,41 +1,41 @@
-# === Настройки ===
+# === Settings ===
 custom_image := "sandbox-base"
 dockerfile   := "Containerfile"
-# Директория создается рядом с файлом .justfile
+# Directory is created next to the .justfile
 root_dir     := justfile_directory() / "sandboxes"
 user_name    := "sandbox"
 prefix       := "box-"
 
-# Системные переменные
+# System variables
 uid      := `id -u`
 run_dir  := "/run/user/" + uid
 
-# Хелперы для экранирования скобок в шаблонах Podman
+# Helpers for escaping braces in Podman templates
 lb := "{{"
 rb := "}}"
 
-# === Команды ===
+# === Commands ===
 default:
     @just --list
 
-# Сборка базового образа (использует кэш Podman автоматически)
+# Building the base image (uses Podman cache automatically)
 build-base:
     @echo "Checking/Building base image {{custom_image}}..."
     podman build -t {{custom_image}} -f {{dockerfile}} .
 
-# Вход в песочницу
+# Enter the sandbox
 box name:
     #!/usr/bin/env bash
     set -e
     full_name="{{prefix}}{{name}}"
     
     if ! podman container exists "$full_name"; then
-        # Всегда вызываем билд перед созданием: если Containerfile не менялся, подхватится кэш
+        # Always run build before creating: if Containerfile hasn't changed, cache will be used
         just build-base
         just _box-create "{{name}}"
     fi
 
-    # Проверка статуса
+    # Checking status
     status=$(podman container inspect -f '{{lb}}.State.Status{{rb}}' "$full_name")
     if [ "$status" != "running" ]; then
         echo "Starting '$full_name'..."
@@ -48,17 +48,17 @@ box name:
         -w "/home/{{user_name}}" \
         "$full_name" /bin/bash
 
-# Удаление песочницы
+# Removing the sandbox
 rm name:
     @echo "Removing sandbox '{{name}}'..."
     @podman stop "{{prefix}}{{name}}" 2>/dev/null || true
     @podman rm -f "{{prefix}}{{name}}" 2>/dev/null || true
 
-# Список песочниц
+# List of sandboxes
 ls:
     @podman ps -a --filter "name={{prefix}}" --format "table {{lb}}.Names{{rb}}\t{{lb}}.Status{{rb}}\t{{lb}}.Image{{rb}}" | sed 's/{{prefix}}//g'
 
-# --- Внутренние рецепты (скрытые) ---
+# --- Internal recipes (hidden) ---
 
 [private]
 _box-create name:
@@ -67,13 +67,13 @@ _box-create name:
     box_path="{{root_dir}}/{{prefix}}{{name}}"
     mkdir -p "$box_path"
     
-    # Лимиты (80% от системы)
+    # Limits (80% of the system)
     mem_limit=$(awk '/MemTotal/ {print int($2*0.8/1024)}' /proc/meminfo)
     cpu_limit=$(nproc | awk '{print $1*0.8}')
 
     echo "Creating '{{name}}' (RAM: ${mem_limit}MB, CPU: ${cpu_limit})..."
 
-    # Сборка монтирований
+    # Building mounts
     mounts="--mount type=tmpfs,destination={{run_dir}},tmpfs-mode=0700"
     
     if [ -n "$WAYLAND_DISPLAY" ] && [ -e "{{run_dir}}/$WAYLAND_DISPLAY" ]; then
@@ -104,7 +104,7 @@ _box-create name:
 [private]
 _box-setup container:
     #!/usr/bin/env bash
-    # 1. Настройка системы от имени root
+    # 1. System setup as root
     podman exec -u 0 "{{container}}" bash -c "
         orig_user=\$(getent passwd {{uid}} | cut -d: -f1)
         
@@ -118,7 +118,7 @@ _box-setup container:
         echo '{{user_name}} ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
         chown {{uid}}:{{uid}} {{run_dir}} && chmod 700 {{run_dir}}
         
-        # Безопасная настройка .bashrc (добавление пути и промпта)
+        # Safe .bashrc setup (adding path and prompt)
         if ! grep -q '.local/bin' /home/{{user_name}}/.bashrc 2>/dev/null; then
             echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/{{user_name}}/.bashrc
             echo 'export PS1=\"\[\e[1;32m\][📦 {{container}}] \[\e[1;34m\]\u@\h:\w$ \[\e[0m\]\"' >> /home/{{user_name}}/.bashrc
@@ -126,7 +126,7 @@ _box-setup container:
         fi
     "
 
-    # 2. Выполнение пользовательского скрипта настройки
+    # 2. Running user setup script
     if [ -f "setup.sh" ]; then
         echo "Running custom setup script (setup.sh)..."
         podman exec -i -u "{{user_name}}" "{{container}}" bash < setup.sh
