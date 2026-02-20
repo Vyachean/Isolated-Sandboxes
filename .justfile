@@ -118,6 +118,13 @@ _box-setup container:
         echo '{{user_name}} ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
         chown {{uid}}:{{uid}} {{run_dir}} && chmod 700 {{run_dir}}
         
+        # Создание скрипта-обертки для прозрачного запуска VS Code
+        mkdir -p /home/{{user_name}}/.local/bin
+        echo '#!/usr/bin/env bash' > /home/{{user_name}}/.local/bin/code
+        echo '/usr/bin/code --no-sandbox --enable-features=UseOzonePlatform --ozone-platform=wayland "\$@"' >> /home/{{user_name}}/.local/bin/code
+        chmod +x /home/{{user_name}}/.local/bin/code
+        chown -R {{uid}}:{{uid}} /home/{{user_name}}/.local
+        
         # Safe .bashrc setup (adding path and prompt)
         if ! grep -q '.local/bin' /home/{{user_name}}/.bashrc 2>/dev/null; then
             echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> /home/{{user_name}}/.bashrc
